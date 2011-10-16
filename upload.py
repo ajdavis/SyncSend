@@ -24,14 +24,62 @@ except ImportError:
     from urllib import unquote
 
 from twisted.web.http_headers import _DictHeaders, Headers
-from twisted.web.http import protocol_version, datetimeToString, toChunk, RESPONSES, Request, _IdentityTransferDecoder
+from twisted.web.http import protocol_version, datetimeToString, toChunk, RESPONSES, Request, _IdentityTransferDecoder, StringTransport
 
 class FileDownloadRequest(Request):
     pass
 
+class _FormDataReceiver(basic.LineReceiver):
+    def __init__(self, boundary, request):
+        """
+        @param boundary:    The multipart form boundary, like '-----------1234'
+        @param request:     A FileUploadRequest
+        """
+        self.start_boundary = '--' + boundary
+        self.end_boundary = '--' + boundary + '--\r\n'
+        self.request = request
+        self.previous_chunk = ''
 
-# response codes that must have empty bodies
-NO_BODY_CODES = (204, 304)
+    def lineReceived(self, line):
+        """Override this for when each line is received.
+        """
+        print line
+        if line == self.start_boundary:
+            pass
+        elif line.startswith('Content-Type:'):
+            # This is a header for this part of the multipart form
+            self.content_type = line.split(':')[1].strip()
+        elif line.startswith('Content-Disposition:'):
+            content_disposition, disp_options = cgi.parse_header(line)
+            default_filename = 'file'
+            self.filename = disp_options.get('filename', default_filename) if disp_options else default_filename
+        elif not line:
+            # Blank line -- we're going to start receiving raw data after this
+            self.file_started = True
+            self.setRawMode()
+            self.request.fileStarted(self.filename)
+
+    def rawDataReceived(self, data):
+        """Override this for when raw data is received.
+        """
+        # TODO: test this for very small chunk sizes and large boundaries
+        # TODO: surely there's a more efficient implementation of this?
+        # If end_boundary is N bytes long, we mustn't send the last N bytes we've seen
+        # until we know whether they're part of the end boundary or not
+        data = self.previous_chunk + data
+        # Save the last N bytes of data
+        self.previous_chunk = data[-len(self.end_boundary):]
+
+        # Give the first part of the data to the request
+        data = data[:-len(self.end_boundary)]
+        if data:
+            self.request.handleFileChunk(self.filename, data)
+
+        if self.previous_chunk == self.end_boundary:
+            self.request.fileCompleted(self.filename)
+
+            # Break circular reference
+            self.request = None
 
 class FileUploadRequest:
     """
@@ -57,8 +105,15 @@ class FileUploadRequest:
     queued = False
     _disconnected = False
 
-    def sendData(self, data):
-        print data # TODO
+    # OVERRIDABLES
+    def fileStarted(self, filename):
+        print 'started', filename
+
+    def handleFileChunk(self, filename, data):
+        print data
+
+    def fileCompleted(self, filename):
+        print 'completed', filename
 
     def __init__(self, channel, queued):
         """
@@ -101,7 +156,6 @@ class FileUploadRequest:
             self.__dict__['headers'] = _DictHeaders(value)
         else:
             self.__dict__[name] = value
-
 
     def _cleanup(self):
         """
@@ -155,6 +209,11 @@ class FileUploadRequest:
         """
         self.content_length = length
 
+        ctypes_raw = self.requestHeaders.getRawHeaders('content-type')
+        content_type, type_options = cgi.parse_header(ctypes_raw[0])
+        boundary = type_options['boundary']
+        self.formDataReceiver = _FormDataReceiver(boundary=boundary, request=self)
+
 
     def handleContentChunk(self, data):
         """
@@ -162,7 +221,7 @@ class FileUploadRequest:
 
         This method is not intended for users.
         """
-        self.sendData(data)
+        self.formDataReceiver.dataReceived(data)
 
     # consumer interface
 
@@ -272,8 +331,7 @@ class FileUploadRequest:
             # chunked mode, so that we can support pipelining in
             # persistent connections.
             if ((version == "HTTP/1.1") and
-                (self.responseHeaders.getRawHeaders('content-length') is None) and
-                self.method != "HEAD" and self.code not in NO_BODY_CODES):
+                (self.responseHeaders.getRawHeaders('content-length') is None)):
                 l.append("%s: %s\r\n" % ('Transfer-Encoding', 'chunked'))
                 self.chunked = 1
 
@@ -296,11 +354,6 @@ class FileUploadRequest:
 
             # if this is a "HEAD" request, we shouldn't return any data
             if self.method == "HEAD":
-                self.write = lambda data: None
-                return
-
-            # for certain result codes, we should never return any data
-            if self.code in NO_BODY_CODES:
                 self.write = lambda data: None
                 return
 
