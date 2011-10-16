@@ -4,6 +4,8 @@ from twisted.protocols import basic
 from twisted.internet import protocol, reactor
 from twisted.web import http
 
+from upload import HTTPFileUploadChannel
+
 #
 #class FileProxy:
 #    def __init__(self, content):
@@ -198,7 +200,7 @@ class SyncSendHttp(http.HTTPChannel):
     requestFactory = SyncSendRequest
 
 class SyncSendHttpFactory(http.HTTPFactory):
-    protocol = SyncSendHttp
+    protocol = HTTPFileUploadChannel
 
 if __name__ == "__main__":
     from twisted.internet import reactor
