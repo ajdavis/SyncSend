@@ -1,0 +1,10 @@
+Prereqs:
+
+nginx
+coffeescript
+twisted
+
+From the SyncSend directory:
+
+sudo nginx -c `pwd`/nginx.conf
+coffee -c -o static -w syncsend.coffee
