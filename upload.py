@@ -1,3 +1,8 @@
+# SyncSend
+# (c) 2011 A. Jesse Jiryu Davis <ajdavis@cs.oberlin.edu>
+# MIT license
+# https://github.com/ajdavis/SyncSend
+
 # system imports
 from cStringIO import StringIO
 import tempfile
@@ -27,7 +32,9 @@ from twisted.web.http_headers import _DictHeaders, Headers
 from twisted.web.http import protocol_version, datetimeToString, toChunk, RESPONSES, Request, _IdentityTransferDecoder, StringTransport
 
 class FileDownloadRequest(Request):
-    pass
+    def __init__(self, channel, path, queued):
+        self.file_download_path = path
+        Request.__init__(self, channel=channel, queued=queued)
 
 class _FormDataReceiver(basic.LineReceiver):
     def __init__(self, boundary, request):
@@ -65,7 +72,7 @@ class _FormDataReceiver(basic.LineReceiver):
         # TODO: test this for very small chunk sizes and large boundaries
         # TODO: surely there's a more efficient implementation of this?
         # If end_boundary is N bytes long, we mustn't send the last N bytes we've seen
-        # until we know whether they're part of the end boundary or not
+        # until we know whether they're the end boundary or not
         data = self.previous_chunk + data
         # Save the last N bytes of data
         self.previous_chunk = data[-len(self.end_boundary):]
@@ -115,9 +122,10 @@ class FileUploadRequest:
     def fileCompleted(self, filename):
         print 'completed', filename
 
-    def __init__(self, channel, queued):
+    def __init__(self, channel, path, queued):
         """
         @param channel: the channel we're connected to.
+        @param path: URI path
         @param queued: are we in the request queue, or can we start writing to
             the transport?
         """
@@ -127,6 +135,7 @@ class FileUploadRequest:
         self.requestHeaders = Headers()
         self.received_cookies = {}
         self.responseHeaders = Headers()
+        self.file_upload_path = path
 
         if queued:
             self.transport = StringTransport()
@@ -459,6 +468,10 @@ class FileUploadRequest:
         return names[0]
 
     def requestReceived(self, command, path, version):
+        """
+        By the time this is called, sender has already uploaded whole file and we've
+        sent all the data to receiver; just close out the request
+        """
         assert command == 'POST'
 
         self.client = self.channel.transport.getPeer()
@@ -483,7 +496,7 @@ class FileUploadRequest:
 
 
 
-class HTTPFileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
+class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
     """
     A receiver for HTTP requests.
 
@@ -504,6 +517,9 @@ class HTTPFileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
 
     _savedTimeOut = None
     _receivedHeaderCount = 0
+
+    uploadRequestClass = FileUploadRequest
+    downloadRequestClass = FileDownloadRequest
 
     def __init__(self):
         # the request queue
@@ -541,7 +557,10 @@ class HTTPFileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
             self._version = version
 
             # create a new Request object
-            request = FileUploadRequest(self, False) if self._command == 'POST' else FileDownloadRequest(self, False)
+            if command == 'POST':
+                request = self.uploadRequestClass(channel=self, path=request, queued=False)
+            else:
+                request = self.downloadRequestClass(channel=self, path=request, queued=False)
             self.requests.append(request)
         elif line == '':
             if self.__header:

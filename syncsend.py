@@ -1,10 +1,15 @@
+# SyncSend
+# (c) 2011 A. Jesse Jiryu Davis <ajdavis@cs.oberlin.edu>
+# MIT license
+# https://github.com/ajdavis/SyncSend
+
 import cgi
 import twisted.web.server
 from twisted.protocols import basic
 from twisted.internet import protocol, reactor
 from twisted.web import http
 
-from upload import HTTPFileUploadChannel
+from upload import FileUploadChannel, FileUploadRequest, FileDownloadRequest
 
 #
 #class FileProxy:
@@ -119,88 +124,51 @@ class SyncSendFileReceiver(basic.LineReceiver):
             self.setReceiverHeader('Content-Disposition', 'file; filename=' + self.filename) # TODO
             self.setRawMode()
 
-class SyncSendContent:
-    """
-    Takes data written by a send request and writes it to a receive request
-    """
-    def __init__(self, key, boundary):
-        """
-        Prepare to send a file from a sender to a receiver.
-        @param key:         The sender's email address or some other unique key
-        @param boundary:    The multipart form boundary, like '-----------1234'
-        """
-        self.key = key
-        self.receiver = SyncSendFileReceiver(key=key, boundary=boundary)
-
-    def seek(self, *args, **kwargs):
-        """
-        Request.requestReceived() calls seek(0,0), so stub it out here to avoid an AttributeError
-        """
-        pass
-
-    def write(self, data):
-        self.receiver.dataReceived(data)
-
-    def close(self, *args, **kwargs):
-        # TODO: check if closed on error, don't assume both the sender and the receiver have ever connected
-        get_request = get_requests[self.key]
-        del get_requests[self.key]
-        if not get_request.finished:
-            get_request.finish()
-
-        post_request = post_requests[self.key]
-        del post_requests[self.key]
-        post_request.write('done\n')
-        post_request.finish()
-
-class SyncSendRequest(http.Request):
+class SyncSendUploadRequest(FileUploadRequest):
     def gotLength(self, length):
         """
         Called when all headers have been received.
-        This request could either be the sender's POST or PUT request, or it could be the receiver's
-        GET request. Either way, set my key based on the URI.
+        This request is the sender's POST request.
         """
-        # HACK: access internal variable, since self.path isn't set until all content has been uploaded
-        self.key = self.channel._path
-        print self.channel._command, self.key
+        FileUploadRequest.gotLength(self, length)
+        print 'POST', self.file_upload_path
+        post_requests[self.file_upload_path] = self
+        if self.file_upload_path not in get_requests:
+            # Wait for receiver to connect
+            self.channel.pauseProducing()
 
-        # HACK: access internal variable, since self.method isn't set until all content has been uploaded
-        if self.channel._command in ('PUT', 'POST'):
-            ctypes_raw = self.requestHeaders.getRawHeaders('content-type')
-            content_type, type_options = cgi.parse_header(ctypes_raw[0])
+    def fileStarted(self, filename):
+        print 'started', filename
 
-            # Instead of using a StringIO or temp file as Twisted does, make a fake file object that
-            # will funnel data from the sender to the receiver
-            self.content = SyncSendContent(
-                key=self.key,
-                boundary=type_options['boundary']
-            )
+    def handleFileChunk(self, filename, data):
+        get_requests[self.file_upload_path].write(data)
 
-            post_requests[self.key] = self
-            if self.key not in get_requests:
-                self.channel.pauseProducing()
-        else:
-            # Normal processing for GET requests
-            http.Request.gotLength(self, length)
+    def fileCompleted(self, filename):
+        print 'finished', filename
+        # TODO: multiple files
+        get_requests[self.file_upload_path].finish()
 
+class SyncSendDownloadRequest(FileDownloadRequest):
     def requestReceived(self, command, path, version):
         """
-        If we're processing an upload, this method is called when all content has been uploaded. If we're
-        processing a download, this is called when we receive the whole GET request.
+        Receiver has started downloading file
         """
-        if command == 'GET':
-            get_requests[self.key] = self
-            if self.key in post_requests:
-                post_requests[self.key].channel.resumeProducing()
-            return twisted.web.server.NOT_DONE_YET
-        else:
-            self.setResponseCode(405, 'Method not allowed')
+        FileDownloadRequest.requestReceived(self, command, path, version)
+        get_requests[self.file_download_path] = self
+        if self.file_download_path in post_requests:
+            post_requests[self.file_download_path].channel.resumeProducing()
+        return twisted.web.server.NOT_DONE_YET
 
-class SyncSendHttp(http.HTTPChannel):
-    requestFactory = SyncSendRequest
+    def finish(self):
+        del get_requests[self.file_download_path]
+        FileDownloadRequest.finish(self)
+
+class SyncSendChannel(FileUploadChannel):
+    uploadRequestClass = SyncSendUploadRequest
+    downloadRequestClass = SyncSendDownloadRequest
 
 class SyncSendHttpFactory(http.HTTPFactory):
-    protocol = HTTPFileUploadChannel
+    protocol = SyncSendChannel
 
 if __name__ == "__main__":
     from twisted.internet import reactor

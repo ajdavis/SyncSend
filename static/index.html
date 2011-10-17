@@ -1,8 +1,14 @@
 <!DOCTYPE html>
+<!--
+    SyncSend
+    (c) 2011 A. Jesse Jiryu Davis <ajdavis@cs.oberlin.edu>
+    MIT license
+    https://github.com/ajdavis/SyncSend
+-->
 <html>
 <head>
     <title>SyncSend</title>
-    <link rel="stylesheet" href="fileuploader.css" type="text/css" />
+    <link rel="stylesheet" href="fileuploader.css" type="text/css">
 </head>
 <body>
     <div id="container">
@@ -16,21 +22,22 @@
     <div id="send_container" style="display: none;">
         <form id="send_email">
             <label>Your email address:</label>
-            <input name="email" />
+            <input name="email">
             <p>I won't ever spam you &mdash; I don't even store your email address.</p>
-            <input type="submit" value="Upload" />
+            <input type="submit" value="Upload">
         </form>
         <form id="send_file" enctype="multipart/form-data" method="post" style="display: none;">
+            <input type="hidden" name="email">
             <input type="file" name="file">
             <div id="file_uploader"></div>
-            <input type="submit" value="Send" />
+            <input type="submit" value="Send">
         </form>
     </div>
     <div id="receive_container" style="display: none;">
         <form id="receive">
-            <label for="receive_email">Sender's email address:</label>
-            <input id="receive_email" name="email" type="email" />
-            <input type="submit" value="Receive" />
+            <label>Sender's email address:</label>
+            <input name="email">
+            <input type="submit" value="Receive">
         </form>
     </div>
     <script src="jquery.js"></script>
