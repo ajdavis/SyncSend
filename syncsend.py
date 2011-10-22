@@ -59,8 +59,6 @@ class SyncSendUploadRequest(FileUploadRequest):
             )
             self.sent_headers = True
 
-        import time
-        time.sleep(.25)
         get_request.write(data)
 
     def fileCompleted(self):
