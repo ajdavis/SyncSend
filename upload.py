@@ -12,6 +12,7 @@ import socket
 import math
 import time
 import calendar
+import urllib
 import warnings
 import os
 from urlparse import urlparse as _urlparse
@@ -29,12 +30,18 @@ except ImportError:
     from urllib import unquote
 
 from twisted.web.http_headers import _DictHeaders, Headers
-from twisted.web.http import protocol_version, datetimeToString, toChunk, RESPONSES, Request, _IdentityTransferDecoder, StringTransport
+from twisted.web.http import protocol_version, datetimeToString, toChunk, RESPONSES, Request, _IdentityTransferDecoder, StringTransport, _ChunkedTransferDecoder, parse_qs
 
 class FileDownloadRequest(Request):
     def __init__(self, channel, path, queued):
         self.file_download_path = path
         Request.__init__(self, channel=channel, queued=queued)
+
+class Context(object):
+    def clear(self):
+        delkeys = [k for k in self.__dict__ if not k.startswith('__')]
+        for k in delkeys:
+            delattr(self, k)
 
 class _FormDataReceiver(basic.LineReceiver):
     def __init__(self, boundary, request):
@@ -47,29 +54,54 @@ class _FormDataReceiver(basic.LineReceiver):
         self.request = request
         self.previous_chunk = ''
 
-    def lineReceived(self, line):
-        """Override this for when each line is received.
+    def lineReceived(self, line, context=Context()):
         """
+        Process multi-part forms.
+        """
+        # TODO: if there were some way to turn this into a coroutine with "yield" it'd be far clearer
+        # TODO: use the multipart form's content-length
+        # See http://www.vivtek.com/rfc1867.html for a writeup of the format we're parsing here
         print line
         if line == self.start_boundary:
-            pass
-        elif line.startswith('Content-Type:'):
-            # This is a header for this part of the multipart form
-            self.content_type = line.split(':')[1].strip()
+            context.clear()
         elif line.startswith('Content-Disposition:'):
             content_disposition, disp_options = cgi.parse_header(line)
-            default_filename = 'file'
-            self.filename = disp_options.get('filename', default_filename) if disp_options else default_filename
+            if disp_options.get('name') == 'file' and 'filename' in disp_options:
+                context.filename = disp_options.get('filename', 'SyncSend_download')
+            else:
+                assert content_disposition.split(':')[1].strip() == 'form-data'
+                context.form_data_name = disp_options['name']
+        elif line.startswith('Content-Type:'):
+            # This is a header like:
+            # Content-Type: image/jpeg
+            context.content_type = line.split(':')[1].strip()
         elif not line:
             # Blank line -- we're going to start receiving raw data after this
-            self.file_started = True
-            self.setRawMode()
-            self.request.fileStarted(self.filename)
+            if getattr(context, 'filename', None):
+                # We're receiving a file like:
+                # --------boundary
+                # Content-Disposition: form-data; name="file"; filename="image.jpg"
+                # Content-Type: image/jpeg
+                self.file_started = True
+                self.setRawMode()
+                self.request.fileStarted(filename=context.filename, content_type=context.content_type)
+            else:
+                # We're receiving a form field like:
+                # --------boundary
+                # Content-Disposition: form-data; name="fieldname"
+                self.file_started = False
+        else:
+            # We're receiving the value of a form field
+            assert not self.file_started
+            # TODO: can there be multiline form field values?
+            self.request.args[context.form_data_name] = line
+
 
     def rawDataReceived(self, data):
         """Override this for when raw data is received.
         """
         # TODO: test this for very small chunk sizes and large boundaries
+        # TODO: test for different sequences of form-data and files in the multipart form
         # TODO: surely there's a more efficient implementation of this?
         # If end_boundary is N bytes long, we mustn't send the last N bytes we've seen
         # until we know whether they're the end boundary or not
@@ -80,13 +112,13 @@ class _FormDataReceiver(basic.LineReceiver):
         # Give the first part of the data to the request
         data = data[:-len(self.end_boundary)]
         if data:
-            self.request.handleFileChunk(self.filename, data)
+            self.request.handleFileChunk(data)
 
         if self.previous_chunk == self.end_boundary:
-            self.request.fileCompleted(self.filename)
-
+            self.request.fileCompleted()
+            self.setLineMode()
             # Break circular reference
-            self.request = None
+#            self.request = None
 
 class FileUploadRequest:
     """
@@ -106,21 +138,20 @@ class FileUploadRequest:
     sentLength = 0 # content-length of response, or total bytes sent via chunking
     etag = None
     lastModified = None
-    args = None
     path = None
     content = None
     queued = False
     _disconnected = False
 
     # OVERRIDABLES
-    def fileStarted(self, filename):
+    def fileStarted(self, filename, content_type):
         print 'started', filename
 
-    def handleFileChunk(self, filename, data):
-        print data
+    def handleFileChunk(self, data):
+        pass
 
-    def fileCompleted(self, filename):
-        print 'completed', filename
+    def fileCompleted(self):
+        print 'done'
 
     def __init__(self, channel, path, queued):
         """
@@ -135,7 +166,20 @@ class FileUploadRequest:
         self.requestHeaders = Headers()
         self.received_cookies = {}
         self.responseHeaders = Headers()
-        self.file_upload_path = path
+
+        # Differs from twisted.http.Request, which starts as None -- we need to store
+        # args *as* we stream the request in from the client, not after we've received
+        # it all, so we start args as a dict
+        self.args = {}
+
+        self.uri = path
+        x = self.uri.split('?', 1)
+
+        if len(x) == 1:
+            self.path = self.uri
+        else:
+            self.path, argstring = x
+            self.args = parse_qs(argstring, 1)
 
         if queued:
             self.transport = StringTransport()
@@ -217,12 +261,26 @@ class FileUploadRequest:
             length.
         """
         self.content_length = length
+        self.received_length = 0
 
         ctypes_raw = self.requestHeaders.getRawHeaders('content-type')
         content_type, type_options = cgi.parse_header(ctypes_raw[0])
-        boundary = type_options['boundary']
-        self.formDataReceiver = _FormDataReceiver(boundary=boundary, request=self)
+        if content_type.lower() == 'multipart/form-data':
+            boundary = type_options['boundary']
+            self.formDataReceiver = _FormDataReceiver(boundary=boundary, request=self)
+            self.is_form = True
+        else:
+            # TODO: unittest form and non-form uploads
 
+            # This file is being uploaded with an XMLHTTPRequest
+            self.is_form = False
+            # filename was quoted with Javascript's encodeURIComponent()
+            self.fileStarted(
+                filename=urllib.unquote(self.getHeader('X-File-Name')),
+                content_type=content_type
+            )
+
+            self.channel.setRawMode()
 
     def handleContentChunk(self, data):
         """
@@ -230,7 +288,13 @@ class FileUploadRequest:
 
         This method is not intended for users.
         """
-        self.formDataReceiver.dataReceived(data)
+        self.received_length += len(data)
+        if self.is_form:
+            self.formDataReceiver.dataReceived(data)
+        else:
+            self.handleFileChunk(data)
+            if self.received_length >= self.content_length:
+                self.fileCompleted()
 
     # consumer interface
 
@@ -474,12 +538,17 @@ class FileUploadRequest:
         """
         assert command == 'POST'
 
+        # For Twisted's logging
         self.client = self.channel.transport.getPeer()
         self.host = self.channel.transport.getHost()
         self.clientproto = version
+        self.process()
 
-        self.setResponseCode(200)
-        self.finish()
+    def process(self):
+        """
+        Override in subclasses.
+        """
+        pass
 
     def connectionLost(self, reason):
         """

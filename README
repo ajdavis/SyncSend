@@ -3,13 +3,33 @@ SyncSend
 MIT license
 https://github.com/ajdavis/SyncSend
 
-Prereqs:
+== Goals, highest- to lowest-priority ==
+
+Power a commercial website that enables people to easily transfer files. Both
+users visit the site roughly simultaneously, enter a unique key (e.g., the
+sender's email address), and the file is transferred without any server-side
+storage.
+
+Implement Twisted classes for streaming HTTP requests that are generally useful
+to Twisted developers.
+
+Learn some cool technologies (Twisted, Socket.io).
+
+Demonstrate skill to potential employers.
+
+== Prereqs ==
 
 nginx
 coffeescript
 twisted
 
+== Running SyncSend ==
+
 From the SyncSend directory:
 
 sudo nginx -c `pwd`/nginx.conf
 coffee -c -o static -w syncsend.coffee
+
+In a separate terminal window:
+
+python syncsend.py

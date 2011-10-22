@@ -4,10 +4,12 @@
 # https://github.com/ajdavis/SyncSend
 #
 
+# options: callback, cancel (another callback), email (the email address)
 make_uploader = (options) ->
     new qq.FileUploader # qq.FileUploader from http://valums.com/ajax-upload/
         element: $('#file_uploader')[0]
         action: '/api/'
+        debug: true
         template: """
             <div class="qq-uploader">
                 <div class="qq-upload-drop-area"><span>Drop files here to upload</span></div>
@@ -16,6 +18,8 @@ make_uploader = (options) ->
             </div>"""
         onComplete: options.callback
         onCancel: options.cancel
+        params:
+            email: options.email
 
 class SyncSend
     constructor: ->
@@ -36,18 +40,23 @@ class SyncSend
         $send_email_form.attr 'disabled', true
         email = $send_email_form.find('input[name="email"]').val()
 
-        uploader = make_uploader
-            callback: (id, fileName, responseJSON) ->
-                if responseJSON
-                    alert 'done'
-                else
-                    alert 'error'
-            cancel: (id, fileName) ->
-                alert 'cancel'
         $send_file_form = $('#send_file')
+        $file_input = $send_file_form.find('input[type="file"]')
+        $submit_button = $send_file_form.find('input[type="submit"]')
+
+        uploader = make_uploader
+            email: email
+            callback: (id, fileName, responseJSON) ->
+                # Nada
+            cancel: (id, fileName) ->
+                # Null
         $send_file_form.attr 'action', '/api/' + encodeURIComponent email
         $send_file_form.find('input[name="email"]').val email
         $send_file_form.fadeIn()
+
+        # Won't be needing the regular upload field any more
+        $file_input.hide()
+        $submit_button.hide()
 
         return false
     submit_receive_form: (e) =>
