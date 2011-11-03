@@ -7,11 +7,13 @@
 # Supports Andrew Valums's fileuploader.js -- all fileuploader-specific
 # code should be here, rather than in upload.py
 #
+import argparse
 
 import json
 
 import twisted.web.server
 from twisted.web import http
+from twisted.internet import reactor
 
 from upload import FileUploadChannel, FileUploadRequest, FileDownloadRequest
 
@@ -39,7 +41,7 @@ class SyncSendUploadRequest(FileUploadRequest):
         self.sent_headers = False
         if self.file_upload_path not in get_requests:
             # Wait for receiver to connect
-            self.channel.pauseProducing()
+            self.pause()
 
     def handleFileChunk(self, data):
         get_request = get_requests[self.file_upload_path]
@@ -86,7 +88,7 @@ class SyncSendDownloadRequest(FileDownloadRequest):
         FileDownloadRequest.requestReceived(self, command, path, version)
         get_requests[self.file_download_path] = self
         if self.file_download_path in post_requests:
-            post_requests[self.file_download_path].channel.resumeProducing()
+            post_requests[self.file_download_path].resume()
         return twisted.web.server.NOT_DONE_YET
 
     def finish(self):
@@ -100,7 +102,15 @@ class SyncSendChannel(FileUploadChannel):
 class SyncSendHttpFactory(http.HTTPFactory):
     protocol = SyncSendChannel
 
-if __name__ == "__main__":
-    from twisted.internet import reactor
-    reactor.listenTCP(8000, SyncSendHttpFactory())
+def parse_args():
+    parser = argparse.ArgumentParser(description='SyncSend server')
+    parser.add_argument('port', type=int, help='TCP port on which to listen')
+    return parser.parse_args()
+
+def main(args):
+    reactor.listenTCP(args.port, SyncSendHttpFactory())
+    print 'Listening on port', args.port
     reactor.run()
+
+if __name__ == "__main__":
+    main(parse_args())

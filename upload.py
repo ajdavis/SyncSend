@@ -43,6 +43,13 @@ class Context(object):
         for k in delkeys:
             delattr(self, k)
 
+class _FakeTransport:
+    def __init__(self):
+        self.disconnecting = False
+    def pauseProducing(self): pass
+    def resumeProducing(self): pass
+    def stopProducing(self): pass
+
 class _FormDataReceiver(basic.LineReceiver):
     def __init__(self, boundary, request):
         """
@@ -53,6 +60,7 @@ class _FormDataReceiver(basic.LineReceiver):
         self.end_boundary = '--' + boundary + '--\r\n'
         self.request = request
         self.previous_chunk = ''
+        self.transport = _FakeTransport()
 
     def lineReceived(self, line, context=Context()):
         """
@@ -66,7 +74,7 @@ class _FormDataReceiver(basic.LineReceiver):
             context.clear()
         elif line.startswith('Content-Disposition:'):
             content_disposition, disp_options = cgi.parse_header(line)
-            if disp_options.get('name') == 'file' and 'filename' in disp_options:
+            if'filename' in disp_options:
                 context.filename = disp_options.get('filename', 'SyncSend_download')
             else:
                 assert content_disposition.split(':')[1].strip() == 'form-data'
@@ -153,6 +161,15 @@ class FileUploadRequest:
     def fileCompleted(self):
         print 'done'
 
+    # PUBLIC METHODS
+    def pause(self):
+        self.channel.pauseProducing()
+        if self.formDataReceiver: self.formDataReceiver.pauseProducing()
+
+    def resume(self):
+        if self.formDataReceiver: self.formDataReceiver.resumeProducing()
+        self.channel.resumeProducing()
+
     def __init__(self, channel, path, queued):
         """
         @param channel: the channel we're connected to.
@@ -166,6 +183,7 @@ class FileUploadRequest:
         self.requestHeaders = Headers()
         self.received_cookies = {}
         self.responseHeaders = Headers()
+        self.formDataReceiver = None
 
         # Differs from twisted.http.Request, which starts as None -- we need to store
         # args *as* we stream the request in from the client, not after we've received
@@ -263,8 +281,9 @@ class FileUploadRequest:
         self.content_length = length
         self.received_length = 0
 
+        # TODO: use mimetypes.guess_type if not set here
         ctypes_raw = self.requestHeaders.getRawHeaders('content-type')
-        content_type, type_options = cgi.parse_header(ctypes_raw[0])
+        content_type, type_options = cgi.parse_header(ctypes_raw[0] if ctypes_raw else '')
         if content_type.lower() == 'multipart/form-data':
             boundary = type_options['boundary']
             self.formDataReceiver = _FormDataReceiver(boundary=boundary, request=self)
@@ -274,9 +293,13 @@ class FileUploadRequest:
 
             # This file is being uploaded with an XMLHTTPRequest
             self.is_form = False
-            # filename was quoted with Javascript's encodeURIComponent()
+            if self.getHeader('X-File-Name'):
+                # filename was quoted with Javascript's encodeURIComponent()
+                filename = urllib.unquote(self.getHeader('X-File-Name'))
+            else:
+                filename = 'file'
             self.fileStarted(
-                filename=urllib.unquote(self.getHeader('X-File-Name')),
+                filename=filename,
                 content_type=content_type
             )
 
@@ -533,7 +556,7 @@ class FileUploadRequest:
 
     def requestReceived(self, command, path, version):
         """
-        By the time this is called, sender has already uploaded whole file and we've
+        By the time this is called, sender has already uploaded the whole file and we've
         sent all the data to receiver; just close out the request
         """
         assert command == 'POST'
