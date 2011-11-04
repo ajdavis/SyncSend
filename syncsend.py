@@ -8,6 +8,7 @@
 # code should be here, rather than in upload.py
 #
 import argparse
+import cgi
 
 import json
 
@@ -24,15 +25,23 @@ post_requests = {}
 get_requests = {}
 
 class SyncSendUploadRequest(FileUploadRequest):
-    def __init__(self, channel, path, queued):
-        FileUploadRequest.__init__(self, channel, path, queued)
+    def __init__(self, channel, path):
+        FileUploadRequest.__init__(self, channel, path)
         if 'email' in self.args:
             self.file_upload_path = self.path.rstrip('/') + '/' + self.args['email'][0]
         else:
             self.file_upload_path = self.path
 
-        print 'POST', self.file_upload_path
         post_requests[self.file_upload_path] = self
+
+    def gotLength(self, length):
+        """
+        Set self.is_form to True or False
+        """
+        # TODO: terser
+        ctypes_raw = self.requestHeaders.getRawHeaders('content-type')
+        content_type, type_options = cgi.parse_header(ctypes_raw[0] if ctypes_raw else '')
+        self.is_form = content_type.lower() == 'multipart/form-data'
 
     def fileStarted(self, filename, content_type):
         print 'started', filename
@@ -41,11 +50,13 @@ class SyncSendUploadRequest(FileUploadRequest):
         self.sent_headers = False
         if self.file_upload_path not in get_requests:
             # Wait for receiver to connect
-            self.pause()
+            print 'pausing upload'
+            self.channel.pauseProducing()
 
-    def handleFileChunk(self, data):
+    def handleFileChunk(self, filename, data):
         get_request = get_requests[self.file_upload_path]
         if not self.sent_headers:
+            # Note that we don't set content-length - we can't know it.
             # TODO: unittest weird filenames, determine what the escaping standard is for filenames
             get_request.setHeader(
                 'Content-Disposition',
@@ -53,11 +64,7 @@ class SyncSendUploadRequest(FileUploadRequest):
             )
             get_request.setHeader(
                 'Content-Type',
-                self.content_type,
-            )
-            get_request.setHeader(
-                'Content-Length',
-                self.content_length,
+                self.channel.content_type, # TODO: decouple
             )
             self.sent_headers = True
 
@@ -65,9 +72,10 @@ class SyncSendUploadRequest(FileUploadRequest):
 
     def fileCompleted(self):
         # TODO: multiple files
-        print 'finished'
+        print 'finished file upload'
 
     def process(self):
+        print 'POST process()'
         self.setResponseCode(200)
 
         # For fileuploader.js, which expects a JSON status
@@ -84,14 +92,16 @@ class SyncSendDownloadRequest(FileDownloadRequest):
         """
         Receiver has started downloading file
         """
-        print 'GET', path
+        print 'GET requestReceived()'
         FileDownloadRequest.requestReceived(self, command, path, version)
         get_requests[self.file_download_path] = self
         if self.file_download_path in post_requests:
-            post_requests[self.file_download_path].resume()
+            print 'resuming upload'
+            post_requests[self.file_download_path].channel.resumeProducing()
         return twisted.web.server.NOT_DONE_YET
 
     def finish(self):
+        print 'GET finish()'
         del get_requests[self.file_download_path]
         FileDownloadRequest.finish(self)
 

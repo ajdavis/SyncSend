@@ -23,7 +23,8 @@ class SyncSendTransferTest(unittest.TestCase):
         @param content_type:    POST request's content-type
         @param expected_value:  If not None, the expected data to download (otherwise we expect postdata)
         """
-        print 'unittester pid:', os.getpid()
+        print 'postdata:\n%s' % repr(postdata)
+        print 'length', len(postdata)
 
         start_server = os.environ.get('SYNCSEND_TEST_NO_SERVER', '').upper() != 'TRUE'
 
@@ -85,20 +86,41 @@ class SyncSendTransferTest(unittest.TestCase):
 
         # post and get processes should be gone by now; make sure (we'll assert later
         # that they terminated on their own, to catch problems in the test harness)
-        for p in post, get:
+        for name in 'post', 'get':
+            p = locals()[name]
             if p.is_alive():
+                print 'killing', name, 'request'
                 kill(p)
 
+        self.assert_('get_result' in shared, "GET request did not complete")
+
+        def clip_data(data):
+            """
+            Clip long data, displaying only the beginning and end
+            """
+            length = 40
+            r = repr(data)
+            if len(r) <= length:
+                return r
+
+            return '%s...%s' % (r[:length/2], r[-length/2:])
+
+        ev = postdata if expected_value is None else expected_value
+        clipped_ev = clip_data(ev)
+        clipped_result = clip_data(shared['get_result'])
         self.assertEqual(
-            postdata if expected_value is None else expected_value,
+            ev,
             shared['get_result'],
-            "Downloaded wrong data"
+            "Downloaded wrong data\nSent (%9d):     %s\nReceived (%9d): %s" % (
+                len(ev), clip_data(ev), len(shared['get_result']), clipped_result,
+            )
         )
 
         self.assertEqual({ "success": 1}, json.loads(shared['post_result']))
 
-        for p in post, get:
-            self.assertEquals(0, p.exitcode)
+        for name in 'post', 'get':
+            p = locals()[name]
+            self.assertEquals(0, p.exitcode, '%s had exit code %s' % (name, p.exitcode))
 
     def _get_url(self, path, portno):
         return "http://localhost:%d/%s" % (self.portno, path)

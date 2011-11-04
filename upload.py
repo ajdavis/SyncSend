@@ -33,9 +33,9 @@ from twisted.web.http_headers import _DictHeaders, Headers
 from twisted.web.http import protocol_version, datetimeToString, toChunk, RESPONSES, Request, _IdentityTransferDecoder, StringTransport, _ChunkedTransferDecoder, parse_qs
 
 class FileDownloadRequest(Request):
-    def __init__(self, channel, path, queued):
+    def __init__(self, channel, path):
         self.file_download_path = path
-        Request.__init__(self, channel=channel, queued=queued)
+        Request.__init__(self, channel=channel, queued=False)
 
 class Context(object):
     def clear(self):
@@ -57,7 +57,10 @@ class _FormDataReceiver(basic.LineReceiver):
         @param request:     A FileUploadRequest
         """
         self.start_boundary = '--' + boundary
-        self.end_boundary = '--' + boundary + '--\r\n'
+
+        # We'll be in raw mode when we see the end boundary, so include the CRLFs in the
+        # characters we look for
+        self.end_boundary = '\r\n--' + boundary + '--\r\n'
         self.request = request
         self.previous_chunk = ''
         self.transport = _FakeTransport()
@@ -66,7 +69,6 @@ class _FormDataReceiver(basic.LineReceiver):
         """
         Process multi-part forms.
         """
-        # TODO: if there were some way to turn this into a coroutine with "yield" it'd be far clearer
         # TODO: use the multipart form's content-length
         # See http://www.vivtek.com/rfc1867.html for a writeup of the format we're parsing here
         print line
@@ -133,6 +135,7 @@ class FileUploadRequest:
     A HTTP request for uploading files. Copied and adapted from twisted.web.http.Request.
 
     Many simplifications over Twisted's Request: no cookies, no authentication, no SSL
+    # TODO: this could inherit from regular requests again
     """
     implements(interfaces.IConsumer)
 
@@ -148,38 +151,29 @@ class FileUploadRequest:
     lastModified = None
     path = None
     content = None
-    queued = False
     _disconnected = False
 
     # OVERRIDABLES
     def fileStarted(self, filename, content_type):
         print 'started', filename
 
-    def handleFileChunk(self, data):
+    def handleFileChunk(self, filename, data):
         pass
 
     def fileCompleted(self):
         print 'done'
 
     # PUBLIC METHODS
-    def pause(self):
-        self.channel.pauseProducing()
-        if self.formDataReceiver: self.formDataReceiver.pauseProducing()
+    def parseCookies(self):
+        pass # TODO
 
-    def resume(self):
-        if self.formDataReceiver: self.formDataReceiver.resumeProducing()
-        self.channel.resumeProducing()
-
-    def __init__(self, channel, path, queued):
+    def __init__(self, channel, path):
         """
         @param channel: the channel we're connected to.
         @param path: URI path
-        @param queued: are we in the request queue, or can we start writing to
-            the transport?
         """
         self.notifications = []
         self.channel = channel
-        self.queued = queued
         self.requestHeaders = Headers()
         self.received_cookies = {}
         self.responseHeaders = Headers()
@@ -199,10 +193,7 @@ class FileUploadRequest:
             self.path, argstring = x
             self.args = parse_qs(argstring, 1)
 
-        if queued:
-            self.transport = StringTransport()
-        else:
-            self.transport = self.channel.transport
+        self.transport = self.channel.transport
 
 
     def __setattr__(self, name, value):
@@ -230,7 +221,7 @@ class FileUploadRequest:
 
     def _cleanup(self):
         """
-        Called when have finished responding and are no longer queued.
+        Called when have finished responding.
         """
         if self.producer:
             log.err(RuntimeError("Producer was not unregistered for %s" % self.uri))
@@ -240,33 +231,6 @@ class FileUploadRequest:
         for d in self.notifications:
             d.callback(None)
         self.notifications = []
-
-    def noLongerQueued(self):
-        """
-        Notify the object that it is no longer queued.
-
-        We start writing whatever data we have to the transport, etc.
-
-        This method is not intended for users.
-        """
-        if not self.queued:
-            raise RuntimeError, "noLongerQueued() got called unnecessarily."
-
-        self.queued = 0
-
-        # set transport to real one and send any buffer data
-        data = self.transport.getvalue()
-        self.transport = self.channel.transport
-        if data:
-            self.transport.write(data)
-
-        # if we have producer, register it with transport
-        if (self.producer is not None) and not self.finished:
-            self.transport.registerProducer(self.producer, self.streamingProducer)
-
-        # if we're finished, clean up
-        if self.finished:
-            self._cleanup()
 
     def gotLength(self, length):
         """
@@ -331,17 +295,13 @@ class FileUploadRequest:
         self.streamingProducer = streaming
         self.producer = producer
 
-        if self.queued:
-            if streaming:
-                producer.pauseProducing()
-        else:
-            self.transport.registerProducer(producer, streaming)
+        if streaming:
+            producer.pauseProducing()
     def unregisterProducer(self):
         """
         Unregister the producer.
         """
-        if not self.queued:
-            self.transport.unregisterProducer()
+        self.transport.unregisterProducer()
         self.producer = None
 
     # private http response methods
@@ -406,8 +366,7 @@ class FileUploadRequest:
             self.channel.factory.log(self) # TODO
 
         self.finished = 1
-        if not self.queued:
-            self._cleanup()
+        self._cleanup()
 
     def write(self, data):
         """
@@ -569,7 +528,7 @@ class FileUploadRequest:
 
     def process(self):
         """
-        Override in subclasses.
+        Override in subclasses. You should probably call self.finish() here.
         """
         pass
 
@@ -600,12 +559,8 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
     maxHeaders = 500 # max number of headers allowed per request
 
     length = 0
-    __header = ''
-    __first_line = 1
-    __content = None
-
-    # set in instances or subclasses
-    requestFactory = Request
+#    __header = ''
+#    __content = None
 
     _savedTimeOut = None
     _receivedHeaderCount = 0
@@ -615,66 +570,215 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
 
     def __init__(self):
         # the request queue
-        self.requests = []
+#        self.requests = []
+        self.count_line_data = False
         self._transferDecoder = None
-
+        self.co = self.dataCoroutine()
+        self.co.next() # Start up the coroutine
 
     def connectionMade(self):
         self.setTimeout(self.timeOut)
 
+    def dataCoroutine(self):
+        line = (yield)
+
+        # IE sends an extraneous empty line (\r\n) after a POST request;
+        # eat up such a line, but only ONCE
+        if not line.strip(): line = (yield)
+
+        # Get the first line, e.g. "POST /api/foo HTTP/1.1"
+        parts = line.split()
+        if len(parts) != 3:
+            self.transport.write("HTTP/1.1 400 Bad Request\r\n\r\n")
+            self.transport.loseConnection()
+            return
+        command, request, version = parts
+        if command not in ('POST', 'GET'):
+            self.transport.write("HTTP/1.1 405 Method Not Allowed\r\n\r\n")
+            self.transport.loseConnection()
+            return
+
+        self.command = command
+        self.path = request
+        self.version = version
+        self.request = (
+            self.uploadRequestClass if self.command == 'POST' else self.downloadRequestClass
+        )(self, self.path)
+
+        line = (yield)
+
+        # Parse header lines
+        header = ''
+        while line.strip():
+            if line[0] in ' \t':
+                # Continuation of a header
+                # TODO: test multiline headers
+                header = header + '\n' + line
+            else:
+                if header:
+                    self.headerReceived(header)
+                header = line
+
+            line = (yield)
+
+        # Last line was empty; process final header
+        if header:
+            self.headerReceived(header)
+
+        # Now we're processing the body
+        if not self._transferDecoder:
+            # TODO: figure this out -- why doesn't FF send transfer-encoding OR content-length?
+            self._transferDecoder = _IdentityTransferDecoder(
+                contentLength=None,
+                dataCallback=self.handleContentChunk,
+                finishCallback=self._finishRequestBody
+            )
+
+        self.count_line_data = True # TODO: HACK!!
+        print '%s %s' % (self.command, self.path)
+        self.request.parseCookies() # TODO: test if we're actually handling cookies well
+        self.request.gotLength(self.length)
+        if command == 'GET':
+            self.request.requestReceived(self.command, self.path, self.version)
+
+        if command == 'POST':
+            ctypes_raw = self.request.requestHeaders.getRawHeaders('content-type')
+            self.content_type, type_options = cgi.parse_header(ctypes_raw[0] if ctypes_raw else '')
+            if self.content_type.lower() == 'multipart/form-data':
+                # Multipart form processing
+                boundary = type_options['boundary']
+                start_boundary = '--' + boundary
+                end_boundary = '--' + boundary + '--'
+
+                # TODO: something with these fields?
+                fields = {}
+
+                # TODO: use coroutine trampolining to let us push this into a subroutine
+                # See http://www.vivtek.com/rfc1867.html for a writeup of the format we're parsing here
+                line = (yield)
+                while line:
+                    print line
+                    # TODO: explain
+                    extra = ''
+                    if line == end_boundary:
+                        print 'reached end boundary'
+                        return # End the coroutine
+                    elif line == start_boundary:
+                        # We're starting a new value -- either a file or a normal form field
+                        line = (yield)
+                        assert line.startswith('Content-Disposition:')
+
+                        content_disposition, disp_options = cgi.parse_header(line)
+                        if 'filename' in disp_options:
+                            filename = disp_options.get('filename', 'file')
+
+                            # This is a header like:
+                            # Content-Type: image/jpeg
+                            line = (yield)
+                            content_type = line.split(':')[1].strip()
+                            self.request.fileStarted(filename=filename, content_type=content_type)
+                            # Consume a blank line
+                            line = (yield)
+                            assert not line.strip()
+
+                            self.setRawMode()
+
+                            # TODO: test this for very small chunk sizes and large boundaries
+                            # TODO: test for different sequences of form-data and files in the multipart form
+                            # TODO: surely there's a more efficient implementation of this?
+                            data = (yield)
+                            while data:
+                                parts = data.split(start_boundary, 1)
+                                if len(parts) == 1:
+                                    # Data does not contain boundary, we're in the middle of
+                                    # a file
+                                    head = parts[0]
+
+                                    # If end_boundary is N bytes long, we mustn't send the last
+                                    # N bytes we've seen until we know whether they're
+                                    # a boundary or not. Save the last N bytes of data.
+                                    boundary_len = max(len(start_boundary), len(end_boundary))
+                                    self.request.handleFileChunk(filename, head[:-boundary_len])
+
+                                    # Continue reading the file
+                                    data = (yield) + head[-boundary_len:]
+                                else:
+                                    # Data contains boundary, we're at the end of this file,
+                                    # and data might contain more form fields, or we might be at
+                                    # the end of the request body
+                                    # TODO: hack!! can't use setLineMode(tail) because that will
+                                    # cause us to re-enter this coroutine
+                                    head, extra = parts
+                                    if head:
+                                        self.request.handleFileChunk(filename, head)
+                                    self.request.fileCompleted()
+
+                                    # TODO: cleanup
+                                    if extra:
+                                        extra = start_boundary + extra
+
+                                    # Continue parsing the body in the outer loop
+                                    break
+
+                            self.setLineMode()
+
+                            # Have we consumed all the data? _transferDecoder subtracts each chunk from
+                            # contentLength until it's 0
+                            line = (yield extra)
+                        else:
+                            assert content_disposition.split(':')[1].strip() == 'form-data'
+                            form_data_name = disp_options['name']
+
+                            # Eat a blank line
+                            line = (yield)
+                            assert not line.strip()
+
+                            # TODO: multi-line values??
+                            form_data_value = (yield)
+                            fields[form_data_name] = form_data_value
+                            print form_data_name, '=', form_data_value
+
+                            # Continue
+                            line = (yield)
+                    else:
+                        # Line isn't start boundary
+                        print 'weird line:', line
+                        line = (yield)
+            else:
+                # We're processing an XMLHTTPRequest file upload -- the body is the file itself
+                if self.request.getHeader('X-File-Name'):
+                    # filename was quoted with Javascript's encodeURIComponent()
+                    filename = urllib.unquote(self.getHeader('X-File-Name'))
+                else:
+                    filename = 'file'
+
+                self.request.fileStarted(filename, self.content_type)
+
+                self.setRawMode()
+                data = (yield)
+                while data:
+                    print data
+                    self.request.handleFileChunk(filename, data)
+                    data = (yield)
+
+                self.request.fileCompleted()
+        print 'Iteration stopped on line:', repr(line)
+
     def lineReceived(self, line):
         self.resetTimeout()
-
-        if self.__first_line:
-            # IE sends an extraneous empty line (\r\n) after a POST request;
-            # eat up such a line, but only ONCE
-            if not line and self.__first_line == 1:
-                self.__first_line = 2
-                return
-
-            self.__first_line = 0
-            parts = line.split()
-            if len(parts) != 3:
-                self.transport.write("HTTP/1.1 400 Bad Request\r\n\r\n")
-                self.transport.loseConnection()
-                return
-            command, request, version = parts
-            if command not in ('POST', 'GET'):
-                self.transport.write("HTTP/1.1 405 Method Not Allowed\r\n\r\n")
-                self.transport.loseConnection()
-                return
-
-            self._command = command
-            self._path = request
-            self._version = version
-
-            # create a new Request object
-            if command == 'POST':
-                request = self.uploadRequestClass(channel=self, path=request, queued=False)
-            else:
-                request = self.downloadRequestClass(channel=self, path=request, queued=False)
-            self.requests.append(request)
-        elif line == '':
-            if self.__header:
-                self.headerReceived(self.__header)
-            self.__header = ''
-            self.allHeadersReceived()
-            if self.length == 0:
-                self.allContentReceived()
-            else:
-                self.setRawMode()
-        elif line[0] in ' \t':
-            self.__header = self.__header+'\n'+line
-        else:
-            if self.__header:
-                self.headerReceived(self.__header)
-            self.__header = line
-
+        if (
+            self.count_line_data and
+            self._transferDecoder and
+            getattr(self._transferDecoder, 'contentLength', None) is not None
+        ): # TODO: unnecessary?
+            self._transferDecoder.contentLength -= len(line) + 2 # Include 2 bytes for the \r\n that's been stripped
+        # Feed line to coroutine
+        try: self.co.send(line)
+        except StopIteration: pass
 
     def _finishRequestBody(self, data):
         self.allContentReceived()
         self.setLineMode(data)
-
 
     def headerReceived(self, line):
         """
@@ -691,13 +795,13 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
         if header == 'content-length':
             self.length = int(data)
             self._transferDecoder = _IdentityTransferDecoder(
-                self.length, self.requests[-1].handleContentChunk, self._finishRequestBody)
+                self.length, self.handleContentChunk, self._finishRequestBody)
         elif header == 'transfer-encoding' and data.lower() == 'chunked':
             self.length = None
             self._transferDecoder = _ChunkedTransferDecoder(
-                self.requests[-1].handleContentChunk, self._finishRequestBody)
+                self.handleContentChunk, self._finishRequestBody)
 
-        reqHeaders = self.requests[-1].requestHeaders
+        reqHeaders = self.request.requestHeaders
         values = reqHeaders.getRawHeaders(header)
         if values is not None:
             values.append(data)
@@ -709,43 +813,42 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
             self.transport.write("HTTP/1.1 400 Bad Request\r\n\r\n")
             self.transport.loseConnection()
 
-
     def allContentReceived(self):
-        command = self._command
-        path = self._path
-        version = self._version
+        # Finish the coroutine
+        if self.co.gi_running:
+            try: self.co.send(None)
+            except StopIteration: pass
 
-        # reset ALL state variables, so we don't interfere with next request
-        self.length = 0
-        self._receivedHeaderCount = 0
-        self.__first_line = 1
-        self._transferDecoder = None
-        del self._command, self._path, self._version
+        print 'calling requestReceived for %s' % self.command
+        assert self.command == 'POST'
+        self.request.requestReceived(self.command, self.path, self.version)
 
         # Disable the idle timeout, in case this request takes a long
         # time to finish generating output.
         if self.timeOut:
             self._savedTimeOut = self.setTimeout(None)
 
-        req = self.requests[-1]
-        req.requestReceived(command, path, version)
-
     def rawDataReceived(self, data):
         self.resetTimeout()
         self._transferDecoder.dataReceived(data)
 
-
-    def allHeadersReceived(self):
-        req = self.requests[-1]
-        req.gotLength(self.length)
+    def handleContentChunk(self, data):
+        # Feed line to coroutine
+        extra = ''
+        try:
+            # TODO: explain
+            extra = self.co.send(data)
+            if extra:
+                self.setLineMode(extra)
+        except StopIteration:
+            pass
 
     def requestDone(self, request):
         """
-        Called by first request in queue when it is done.
+        Called by request it is done.
         """
-        if request != self.requests[0]: raise TypeError
-        del self.requests[0]
         self.transport.loseConnection()
+        self.request = None
 
     def timeoutConnection(self):
         log.msg("Timing out client: %s" % str(self.transport.getPeer()))
@@ -753,5 +856,4 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
 
     def connectionLost(self, reason):
         self.setTimeout(None)
-        for request in self.requests:
-            request.connectionLost(reason)
+#        self.request.connectionLost(reason)
