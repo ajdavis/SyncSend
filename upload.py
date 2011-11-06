@@ -37,99 +37,6 @@ class FileDownloadRequest(Request):
         self.file_download_path = path
         Request.__init__(self, channel=channel, queued=False)
 
-class Context(object):
-    def clear(self):
-        delkeys = [k for k in self.__dict__ if not k.startswith('__')]
-        for k in delkeys:
-            delattr(self, k)
-
-class _FakeTransport:
-    def __init__(self):
-        self.disconnecting = False
-    def pauseProducing(self): pass
-    def resumeProducing(self): pass
-    def stopProducing(self): pass
-
-class _FormDataReceiver(basic.LineReceiver):
-    def __init__(self, boundary, request):
-        """
-        @param boundary:    The multipart form boundary, like '-----------1234'
-        @param request:     A FileUploadRequest
-        """
-        self.start_boundary = '--' + boundary
-
-        # We'll be in raw mode when we see the end boundary, so include the CRLFs in the
-        # characters we look for
-        self.end_boundary = '\r\n--' + boundary + '--\r\n'
-        self.request = request
-        self.previous_chunk = ''
-        self.transport = _FakeTransport()
-
-    def lineReceived(self, line, context=Context()):
-        """
-        Process multi-part forms.
-        """
-        # TODO: use the multipart form's content-length
-        # See http://www.vivtek.com/rfc1867.html for a writeup of the format we're parsing here
-        print line
-        if line == self.start_boundary:
-            context.clear()
-        elif line.startswith('Content-Disposition:'):
-            content_disposition, disp_options = cgi.parse_header(line)
-            if'filename' in disp_options:
-                context.filename = disp_options.get('filename', 'SyncSend_download')
-            else:
-                assert content_disposition.split(':')[1].strip() == 'form-data'
-                context.form_data_name = disp_options['name']
-        elif line.startswith('Content-Type:'):
-            # This is a header like:
-            # Content-Type: image/jpeg
-            context.content_type = line.split(':')[1].strip()
-        elif not line:
-            # Blank line -- we're going to start receiving raw data after this
-            if getattr(context, 'filename', None):
-                # We're receiving a file like:
-                # --------boundary
-                # Content-Disposition: form-data; name="file"; filename="image.jpg"
-                # Content-Type: image/jpeg
-                self.file_started = True
-                self.setRawMode()
-                self.request.fileStarted(filename=context.filename, content_type=context.content_type)
-            else:
-                # We're receiving a form field like:
-                # --------boundary
-                # Content-Disposition: form-data; name="fieldname"
-                self.file_started = False
-        else:
-            # We're receiving the value of a form field
-            assert not self.file_started
-            # TODO: can there be multiline form field values?
-            self.request.args[context.form_data_name] = line
-
-
-    def rawDataReceived(self, data):
-        """Override this for when raw data is received.
-        """
-        # TODO: test this for very small chunk sizes and large boundaries
-        # TODO: test for different sequences of form-data and files in the multipart form
-        # TODO: surely there's a more efficient implementation of this?
-        # If end_boundary is N bytes long, we mustn't send the last N bytes we've seen
-        # until we know whether they're the end boundary or not
-        data = self.previous_chunk + data
-        # Save the last N bytes of data
-        self.previous_chunk = data[-len(self.end_boundary):]
-
-        # Give the first part of the data to the request
-        data = data[:-len(self.end_boundary)]
-        if data:
-            self.request.handleFileChunk(data)
-
-        if self.previous_chunk == self.end_boundary:
-            self.request.fileCompleted()
-            self.setLineMode()
-            # Break circular reference
-#            self.request = None
-
 class FileUploadRequest:
     """
     A HTTP request for uploading files. Copied and adapted from twisted.web.http.Request.
@@ -363,7 +270,7 @@ class FileUploadRequest:
 
         # log request
         if hasattr(self.channel, "factory"):
-            self.channel.factory.log(self) # TODO
+            self.channel.factory.log(self)
 
         self.finished = 1
         self._cleanup()
@@ -545,10 +452,9 @@ class FileUploadRequest:
             d.errback(reason)
         self.notifications = []
 
-
-
 class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
     """
+    # TODO: explain
     A receiver for HTTP requests.
 
     @ivar _transferDecoder: C{None} or an instance of
@@ -559,8 +465,6 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
     maxHeaders = 500 # max number of headers allowed per request
 
     length = 0
-#    __header = ''
-#    __content = None
 
     _savedTimeOut = None
     _receivedHeaderCount = 0
@@ -569,8 +473,6 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
     downloadRequestClass = FileDownloadRequest
 
     def __init__(self):
-        # the request queue
-#        self.requests = []
         self.count_line_data = False
         self._transferDecoder = None
         self.co = self.dataCoroutine()
@@ -661,7 +563,6 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
                     # TODO: explain
                     extra = ''
                     if line == end_boundary:
-                        print 'reached end boundary'
                         return # End the coroutine
                     elif line == start_boundary:
                         # We're starting a new value -- either a file or a normal form field
@@ -688,7 +589,7 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
                             # TODO: surely there's a more efficient implementation of this?
                             data = (yield)
                             while data:
-                                parts = data.split(start_boundary, 1)
+                                parts = data.split('\r\n' + start_boundary, 1)
                                 if len(parts) == 1:
                                     # Data does not contain boundary, we're in the middle of
                                     # a file
@@ -701,7 +602,8 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
                                     self.request.handleFileChunk(filename, head[:-boundary_len])
 
                                     # Continue reading the file
-                                    data = (yield) + head[-boundary_len:]
+                                    saved_len = len(head[-boundary_len:])
+                                    data = head[-boundary_len:] + (yield)
                                 else:
                                     # Data contains boundary, we're at the end of this file,
                                     # and data might contain more form fields, or we might be at
@@ -722,8 +624,7 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
 
                             self.setLineMode()
 
-                            # Have we consumed all the data? _transferDecoder subtracts each chunk from
-                            # contentLength until it's 0
+                            # TODO: explain
                             line = (yield extra)
                         else:
                             assert content_disposition.split(':')[1].strip() == 'form-data'
@@ -755,14 +656,21 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
                 self.request.fileStarted(filename, self.content_type)
 
                 self.setRawMode()
-                data = (yield)
-                while data:
-                    print data
-                    self.request.handleFileChunk(filename, data)
-                    data = (yield)
 
-                self.request.fileCompleted()
-        print 'Iteration stopped on line:', repr(line)
+#                if self._transferDecoder.contentLength == 0:
+#                    # Empty file; _transferDecoder.dataReceived() won't ever be
+#                    # called, so we need to call our finishCallback ourselves
+#                    self.request.fileCompleted()
+#                    self._finishRequestBody('')
+#                else:
+                if True:
+                    # Content-Length counts down to 0
+                    while self._transferDecoder.contentLength:
+                        data = (yield)
+                        if data:
+                            self.request.handleFileChunk(filename, data)
+
+                    self.request.fileCompleted()
 
     def lineReceived(self, line):
         self.resetTimeout()
@@ -779,6 +687,20 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
     def _finishRequestBody(self, data):
         self.allContentReceived()
         self.setLineMode(data)
+
+    def resumeProducing(self):
+        """
+        Override _PauseableMixin's resumeProducing() to handle a special case:
+        0-length files uploaded via AJAX
+        """
+        # Call super
+        basic.LineReceiver.resumeProducing(self)
+
+        if (
+            self.content_type.lower() != 'multipart/form-data' and
+            self.request.getHeader('content-length') == '0'
+        ):
+            self._finishRequestBody('')
 
     def headerReceived(self, line):
         """
@@ -819,7 +741,6 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
             try: self.co.send(None)
             except StopIteration: pass
 
-        print 'calling requestReceived for %s' % self.command
         assert self.command == 'POST'
         self.request.requestReceived(self.command, self.path, self.version)
 
@@ -847,8 +768,8 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
         """
         Called by request it is done.
         """
+        print self.command, 'request done'
         self.transport.loseConnection()
-        self.request = None
 
     def timeoutConnection(self):
         log.msg("Timing out client: %s" % str(self.transport.getPeer()))
@@ -856,4 +777,4 @@ class FileUploadChannel(basic.LineReceiver, policies.TimeoutMixin):
 
     def connectionLost(self, reason):
         self.setTimeout(None)
-#        self.request.connectionLost(reason)
+        self.request.connectionLost(reason)

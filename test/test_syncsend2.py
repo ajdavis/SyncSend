@@ -23,9 +23,6 @@ class SyncSendTransferTest(unittest.TestCase):
         @param content_type:    POST request's content-type
         @param expected_value:  If not None, the expected data to download (otherwise we expect postdata)
         """
-        print 'postdata:\n%s' % repr(postdata)
-        print 'length', len(postdata)
-
         start_server = os.environ.get('SYNCSEND_TEST_NO_SERVER', '').upper() != 'TRUE'
 
         path = 'api/' + key
@@ -60,7 +57,7 @@ class SyncSendTransferTest(unittest.TestCase):
 
         def get_fn(shared):
             get_result = urllib2.urlopen(url=url).read()
-            print 'get_fn() got length %d: %s' % (len(get_result), str(get_result)[:1000])
+            print 'get_fn() got length %d: %s' % (len(get_result), str(get_result)[:100])
             shared['get_result'] = get_result
         get = multiprocessing.Process(target=get_fn, args=(shared, ))
 
@@ -78,8 +75,8 @@ class SyncSendTransferTest(unittest.TestCase):
             print 'POST: pid', post.pid
 
         # Wait for the sender and receiver to complete
-        post.join(timeout=5)
-        get.join(timeout=5)
+        post.join(timeout=10)
+        get.join(timeout=10)
 
         # The server will run indefinitely unless killed
         if start_server: kill(server)
@@ -116,7 +113,8 @@ class SyncSendTransferTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual({ "success": 1}, json.loads(shared['post_result']))
+        if not content_type.startswith('multipart/form-data'):
+            self.assertEqual({ "success": 1 }, json.loads(shared['post_result']))
 
         for name in 'post', 'get':
             p = locals()[name]
@@ -143,26 +141,37 @@ class SyncSendTransferTest(unittest.TestCase):
 
             tmp.seek(0, 0)
             self._test_transfer(postdata, 'fake_email_address', send_first, content_type, expected_value=tmp.read())
-#
-#for data_length in range(0, 18):
-#    for send_first in (True, False):
-#        # Close over the data_length and send_first values
-#        def immediate(data_length, send_first):
-#            fname = 'test_xhr_%02d_bytes_%s_first' % (
-#                data_length, 'send' if send_first else 'receive'
-#            )
-#
-#            setattr(SyncSendTransferTest, fname, lambda self: self._test_xhr_upload(data_length, send_first))
-#        immediate(data_length, send_first)
 
-for data_length, length_name in [
-#    (0, 'zero'),
+lengths = [
+    (0, 'zero'),
+    (1, '1b'),
+    (2, '2b'),
+    (3, '3b'),
+    (15, '15b'),
+    (16, '16b'),
+    (17, '17b'),
     (1024, '1kb'),
-#    (1024**2, '1MB'),
-#    (1024**3, '1GB'),
-]:
-    for send_first in (True, ):
-#    for send_first in (True, False):
+    (10 * 1024, '10kb'),
+    (63 * 1024, '63kb'),
+    (64 * 1024, '64kb'),
+    (65 * 1024, '65kb'),
+    (1024**2, '1MB'),
+    ((1024**3)/2, '500MB'),
+]
+
+for data_length, length_name in lengths:
+    for send_first in (True,):# False):
+        # Close over the data_length and send_first values
+        def immediate(data_length, send_first):
+            fname = 'test_xhr_%02d_bytes_%s_first' % (
+                data_length, 'send' if send_first else 'receive'
+            )
+
+            setattr(SyncSendTransferTest, fname, lambda self: self._test_xhr_upload(data_length, send_first))
+        immediate(data_length, send_first)
+
+for data_length, length_name in lengths:
+    for send_first in (True, False):
         # Close over the data_length and send_first values
         def immediate(data_length, send_first):
             fname = 'test_multipart_form_%s_%s_first' % (

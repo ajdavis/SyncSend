@@ -56,7 +56,7 @@ class SyncSendUploadRequest(FileUploadRequest):
     def handleFileChunk(self, filename, data):
         get_request = get_requests[self.file_upload_path]
         if not self.sent_headers:
-            # Note that we don't set content-length - we can't know it.
+            # TODO: content-length for XHR uploads
             # TODO: unittest weird filenames, determine what the escaping standard is for filenames
             get_request.setHeader(
                 'Content-Disposition',
