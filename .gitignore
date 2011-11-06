@@ -2,3 +2,4 @@ static/syncsend.js
 .DS_Store
 .idea
 *.pyc
+log/

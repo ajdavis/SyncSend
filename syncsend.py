@@ -8,7 +8,6 @@
 # code should be here, rather than in upload.py
 #
 import argparse
-import cgi
 
 import json
 
@@ -16,7 +15,7 @@ import twisted.web.server
 from twisted.web import http
 from twisted.internet import reactor
 
-from upload import FileUploadChannel, FileUploadRequest, FileDownloadRequest
+from upload import FileUploadChannel, FileUploadRequest
 
 # Users start sending or receiving files by entering an email address or
 # some other unique key. These dicts map from keys to GET requests (the
@@ -34,23 +33,12 @@ class SyncSendUploadRequest(FileUploadRequest):
 
         post_requests[self.file_upload_path] = self
 
-    def gotLength(self, length):
-        """
-        Set self.is_form to True or False
-        """
-        # TODO: terser
-        ctypes_raw = self.requestHeaders.getRawHeaders('content-type')
-        content_type, type_options = cgi.parse_header(ctypes_raw[0] if ctypes_raw else '')
-        self.is_form = content_type.lower() == 'multipart/form-data'
-
     def fileStarted(self, filename, content_type):
-        print 'started', filename
         self.filename = filename
         self.content_type = content_type
         self.sent_headers = False
         if self.file_upload_path not in get_requests:
             # Wait for receiver to connect
-            print 'pausing upload'
             self.channel.pauseProducing()
 
     def handleFileChunk(self, filename, data):
@@ -64,7 +52,7 @@ class SyncSendUploadRequest(FileUploadRequest):
             )
             get_request.setHeader(
                 'Content-Type',
-                self.channel.content_type, # TODO: decouple
+                self.content_type,
             )
             self.sent_headers = True
 
@@ -72,38 +60,31 @@ class SyncSendUploadRequest(FileUploadRequest):
 
     def fileCompleted(self):
         # TODO: multiple files
-        print 'finished file upload'
+        pass
 
     def process(self):
-        print 'POST process()'
-        self.setResponseCode(200)
-
         # For fileuploader.js, which expects a JSON status
-        if not self.is_form:
-            self.write(json.dumps({ 'success': 1 }))
+        self.write(json.dumps({ 'success': 1 }))
 
         self.finish()
 
         get_requests[self.file_upload_path].finish()
         del post_requests[self.file_upload_path]
 
-class SyncSendDownloadRequest(FileDownloadRequest):
+class SyncSendDownloadRequest(http.Request):
     def requestReceived(self, command, path, version):
         """
         Receiver has started downloading file
         """
-        print 'GET requestReceived()'
-        FileDownloadRequest.requestReceived(self, command, path, version)
-        get_requests[self.file_download_path] = self
-        if self.file_download_path in post_requests:
-            print 'resuming upload'
-            post_requests[self.file_download_path].channel.resumeProducing()
+        http.Request.requestReceived(self, command, path, version)
+        get_requests[self.path] = self
+        if self.path in post_requests:
+            post_requests[self.path].channel.resumeProducing()
         return twisted.web.server.NOT_DONE_YET
 
     def finish(self):
-        print 'GET finish()'
-        del get_requests[self.file_download_path]
-        FileDownloadRequest.finish(self)
+        del get_requests[self.path]
+        http.Request.finish(self)
 
 class SyncSendChannel(FileUploadChannel):
     uploadRequestClass = SyncSendUploadRequest
