@@ -32,15 +32,25 @@ def kill(process):
     os.kill(process.pid, signal.SIGKILL)
 
 class SyncSendTransferTest(unittest.TestCase):
-    def _test_transfer(self, postdata, key, send_first, content_type, expected_value=None, n_transfers=1):
+    def _test_transfer(
+        self,
+        postdata,
+        key,
+        send_first,
+        content_type,
+        expected_value=None,
+        n_transfers=1,
+        expected_content_length=None,
+    ):
         """
         Test sending and receiving some data
-        @param postdata:        The request body
-        @param key:             The unique key, e.g. the sender's email address
-        @param send_first:      If True, start sending before receiving, otherwise the opposite
-        @param content_type:    POST request's content-type
-        @param expected_value:  If not None, the expected data to download (otherwise we expect postdata)
-        @param n_transfers:     Number of simultaneous transfers
+        @param postdata:                The request body
+        @param key:                     The unique key, e.g. the sender's email address
+        @param send_first:              If True, start sending before receiving, otherwise the opposite
+        @param content_type:            POST request's content-type
+        @param expected_value:          If not None, the expected data to download (otherwise we expect postdata)
+        @param n_transfers:             Number of simultaneous transfers
+        @param expected_content_length: If not -1, check the response's content-length
         """
         start_server = os.environ.get('SYNCSEND_TEST_NO_SERVER', '').upper() != 'TRUE'
 
@@ -78,14 +88,14 @@ class SyncSendTransferTest(unittest.TestCase):
 
         def post_fn(i):
             request = urllib2.Request(url=url + str(i), data=postdata, headers={ 'Content-Type': content_type })
-            post_result = urllib2.urlopen(request).read()
-            shareds[i]['post_result'] = post_result
+            shareds[i]['post_result'] = urllib2.urlopen(request).read()
             child_complete()
         posts = [multiprocessing.Process(target=post_fn, args=(i, )) for i in range(n_transfers)]
 
         def get_fn(i):
-            get_result = urllib2.urlopen(url=url + str(i)).read()
-            shareds[i]['get_result'] = get_result
+            get_result = urllib2.urlopen(url=url + str(i))
+            shareds[i]['get_result'] = get_result.read()
+            shareds[i]['content_length'] = get_result.headers.getheader('Content-Length')
             child_complete()
         gets = [multiprocessing.Process(target=get_fn, args=(i, )) for i in range(n_transfers)]
 
@@ -100,7 +110,7 @@ class SyncSendTransferTest(unittest.TestCase):
 
         # Wait for the senders and receivers to complete - give more time for more transferring
         timeout = 10 + n_transfers + (len(postdata) * n_transfers) / (1024**2)
-        print 'waiting', timeout, 'seconds'
+        print 'waiting up to', timeout, 'seconds'
         with children_complete:
             children_complete.wait(timeout=timeout)
 
@@ -147,6 +157,15 @@ class SyncSendTransferTest(unittest.TestCase):
                 )
             )
 
+            if expected_content_length is not None:
+                content_length = shareds[i].get('content_length')
+                self.assert_(content_length is not None, "No content-length in GET response")
+                self.assertEqual(
+                    expected_content_length,
+                    int(content_length),
+                    'Wrong content-length'
+                )
+
         # SyncSendUploadRequests should return the JSON "{ success: 1 }" for XMLHTTPRequest-style uploads
         if not content_type.startswith('multipart/form-data'):
             for i in range(n_transfers):
@@ -163,7 +182,13 @@ class SyncSendTransferTest(unittest.TestCase):
 class SyncSendXHRTest(SyncSendTransferTest):
     def _test_xhr_upload(self, data_length, send_first):
         postdata = '0' * data_length
-        self._test_transfer(postdata, 'fake_email_address', send_first, 'application/octet-stream')
+        self._test_transfer(
+            postdata,
+            'fake_email_address',
+            send_first,
+            'application/octet-stream',
+            expected_content_length=data_length,
+        )
 
     def test_2_xhr_transfers(self):
         postdata = '0' * 1024
@@ -182,7 +207,10 @@ for data_length, length_name in lengths:
                 data_length, 'send' if send_first else 'receive'
                 )
 
-            setattr(SyncSendXHRTest, fname, lambda self: self._test_xhr_upload(data_length, send_first))
+            def f(self):
+                self._test_xhr_upload(data_length, send_first)
+            f.__name__ = fname
+            setattr(SyncSendXHRTest, fname, f)
         immediate(data_length, send_first)
 
 class SyncSendMultipartFormTest(SyncSendTransferTest):
@@ -230,7 +258,10 @@ for data_length, length_name in lengths:
                 length_name, 'send' if send_first else 'receive'
             )
 
-            setattr(SyncSendMultipartFormTest, fname, lambda self: self._test_multipart_form_upload(data_length, send_first))
+            def f(self):
+                self._test_multipart_form_upload(data_length, send_first)
+            f.__name__ = fname
+            setattr(SyncSendMultipartFormTest, fname, f)
         immediate(data_length, send_first)
 
 

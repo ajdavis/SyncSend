@@ -285,9 +285,8 @@ class FileUploadChannel(HTTPChannel):
 
     def allContentReceived(self):
         # Finish the coroutine
-        if self.co.gi_running:
-            try: self.co.send(None)
-            except StopIteration: pass
+        try: self.co.send(None)
+        except StopIteration: pass
 
         assert self.command == 'POST'
 
