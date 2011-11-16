@@ -61,6 +61,11 @@ class FileUploadChannel(HTTPChannel):
         L{_ChunkedTransferDecoder} if the request body uses the I{chunked}
         Transfer-Encoding.
     """
+    # In my (Jesse's) experience, I haven't implemented this channel well enough
+    # to allow HTTPChannel to decide to be persistent, the GET request is never
+    # closed ....
+    # TODO: can we do persistent connections? Or at least determine for sure why not?
+    persistent = 0
     uploadRequestClass = FileUploadRequest
     downloadRequestClass = Request # Standard Twisted HTTP Request
 
