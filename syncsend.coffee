@@ -4,6 +4,9 @@
 # https://github.com/ajdavis/SyncSend
 #
 
+# Do some jQuery UI stuff
+$('#tabs').tabs()
+
 config =
     use_ajax_upload: no
 
@@ -26,14 +29,6 @@ make_uploader = (options) ->
 
 class SyncSend
     constructor: ->
-        $('#send_button').click ->
-            $('#receive_container').fadeOut ->
-                $('#send_container').fadeIn()
-
-        $('#receive_button').click ->
-            $('#send_container').fadeOut ->
-                $('#receive_container').fadeIn()
-
         # TODO: disable submit buttons until forms are filled out
         $('#send_email').submit @submit_send_email_form
         $('#receive').submit @submit_receive_form

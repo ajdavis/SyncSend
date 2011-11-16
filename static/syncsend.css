@@ -1,0 +1,39 @@
+.form-stacked {
+    padding-left: 0;
+}
+
+#button_container {
+    text-align: center;
+}
+
+#send_button, #receive_button {
+    width: 240px;
+    margin: 25px 5px 15px 5px;
+}
+
+#form_container, #form_container input {
+    width: 482px;
+    margin: 0 auto;
+}
+
+.btn.chosen {
+    background-color: #00cd64;
+    background-repeat: repeat-x;
+    background-image: -khtml-gradient(linear, left top, left bottom, from(#04db9c), to(#00cd64));
+    background-image: -moz-linear-gradient(top, #04db9c, #00cd64);
+    background-image: -ms-linear-gradient(top, #04db9c, #00cd64);
+    background-image: -webkit-gradient(linear, left top, left bottom, color-stop(0%, #04db9c), color-stop(100%, #00cd64));
+    background-image: -webkit-linear-gradient(top, #04db9c, #00cd64);
+    background-image: -o-linear-gradient(top, #04db9c, #00cd64);
+    background-image: linear-gradient(top, #04db9c, #00cd64);
+    filter: progid:DXImageTransform.Microsoft.gradient(startColorstr='#04db9c', endColorstr='#00cd64', GradientType=0);
+    text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.25);
+    border-color: #00cd64 #00cd64 #00813f;
+    border-color: rgba(0, 0, 0, 0.1) rgba(0, 0, 0, 0.1) rgba(0, 0, 0, 0.25);
+
+}
+
+p.note {
+    font-style: italic;
+    padding-top: 6px;
+}
