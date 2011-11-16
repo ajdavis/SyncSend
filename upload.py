@@ -140,7 +140,8 @@ class FileUploadChannel(HTTPChannel):
         self.count_line_data = True # TODO: HACK!!
         print '%s %s' % (self.command, self.path)
         self.request.parseCookies() # TODO: test if we're actually handling cookies well
-        print command, 'gotLength()', self.length
+        if command == 'POST':
+            print command, 'gotLength()', self.length
         self.request.gotLength(self.length)
         if command == 'GET':
             self.request.requestReceived(self.command, self.path, self.version)

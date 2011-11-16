@@ -47,7 +47,7 @@ class SyncSendUploadRequest(FileUploadRequest):
             # TODO: unittest weird filenames, determine what the escaping standard is for filenames
             if self.channel.content_type.lower() != 'multipart/form-data':
                 # This is an XHR upload, so we know the content-length before the file
-                # is completely uploaded
+                # is starts uploading
                 get_request.setHeader(
                     'Content-Length',
                     str(self.channel.length),
@@ -68,14 +68,19 @@ class SyncSendUploadRequest(FileUploadRequest):
 
     def fileCompleted(self):
         # TODO: multiple files
-        print 'file completed'
         get_request = get_requests[self.file_upload_path]
         self._ensure_headers(get_request)
 
     def process(self):
-        # For fileuploader.js, which expects a JSON status
-        self.write(json.dumps({ 'success': 1 }))
-
+        if self.channel.content_type.lower() != 'multipart/form-data':
+            # For fileuploader.js, which expects a JSON status
+            self.write(json.dumps({ 'success': 1 }))
+        else:
+            # For multipart-form upload, where the user's browser actually
+            # navigates to the POST URL when the POST completes; we need
+            # to send the user back to the home page
+            self.redirect('/?msg=complete')
+        print self.method, 'finish()'
         self.finish()
 
         get_requests[self.file_upload_path].finish()
