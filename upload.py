@@ -248,7 +248,7 @@ class FileUploadChannel(HTTPChannel):
                 # We're processing an XMLHTTPRequest file upload -- the body is the file itself
                 if self.request.getHeader('X-File-Name'):
                     # filename was quoted with Javascript's encodeURIComponent()
-                    filename = urllib.unquote(self.getHeader('X-File-Name'))
+                    filename = urllib.unquote(self.request.getHeader('X-File-Name'))
                 else:
                     filename = 'file'
 

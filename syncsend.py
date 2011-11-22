@@ -10,6 +10,8 @@
 import argparse
 
 import json
+import urllib
+import urlparse
 
 import twisted.web.server
 from twisted.web import http
@@ -26,7 +28,7 @@ get_requests = {}
 class SyncSendUploadRequest(FileUploadRequest):
     def __init__(self, channel, path):
         FileUploadRequest.__init__(self, channel, path)
-        self.file_upload_path = self.path
+        self.file_upload_path = urlparse.urlparse(path).path
         post_requests[self.file_upload_path] = self
 
     def fileStarted(self, filename, content_type):
@@ -79,7 +81,9 @@ class SyncSendUploadRequest(FileUploadRequest):
             # For multipart-form upload, where the user's browser actually
             # navigates to the POST URL when the POST completes; we need
             # to send the user back to the home page
-            self.redirect('/?msg=complete')
+            self.redirect('#?msg=%s' % urllib.quote_plus(
+                "Your upload is complete"
+            ))
         print self.method, 'finish()'
         self.finish()
 
