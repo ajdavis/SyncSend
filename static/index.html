@@ -13,33 +13,31 @@
     <link rel="stylesheet" href="syncsend.css" type="text/css">
 </head>
 <body>
+    <div id="msg" class="ui-widget ui-widget-content ui-corner-all"></div>
     <div id="tabs" class="ui-tabs ui-widget ui-widget-content ui-corner-all">
         <ul class="ui-tabs-nav ui-helper-reset ui-helper-clearfix ui-widget-header ui-corner-all">
-            <li class="ui-state-default ui-corner-top"><a href="#send_container">First</a></li>
-            <li class="ui-state-default ui-corner-top"><a href="#receive_container">Second</a></li>
+            <li class="ui-state-default ui-corner-top"><a href="#send_container">Send a file</a></li>
+            <li class="ui-state-default ui-corner-top"><a href="#receive_container">Receive a file</a></li>
         </ul>
-        <div id="form_container">
-            <div id="send_container" class="ui-tabs-panel ui-widget-content ui-corner-bottom ui-tabs-hide">
-                <form id="send_email" class="form-stacked">
-                    <label for="send_email_email">Your email address:</label>
-                    <input id="send_email_email" name="email">
-                    <p class="note">I won't ever spam you &mdash; I don't even store your email address.</p>
-                    <input type="submit" class="ui-button ui-widget ui-state-default ui-corner-all ui-button-text-only" role="button" aria-disabled="false" value="Choose a file">
-                </form>
-                <form id="send_file" enctype="multipart/form-data" method="post" style="display: none;">
-                    <input type="hidden" name="email">
-                    <input type="file" name="file">
-                    <div id="file_uploader"></div>
-                    <input type="submit" value="Send">
-                </form>
-            </div>
-            <div id="receive_container" class="ui-tabs-panel ui-widget-content ui-corner-bottom ui-tabs-hide">
-                <form id="receive">
-                    <label for="receive_email">Sender's email address:</label>
-                    <input id="receive_email" name="email">
-                    <input type="submit" value="Receive">
-                </form>
-            </div>
+        <div id="send_container" class="ui-tabs-panel ui-widget-content ui-corner-bottom ui-tabs-hide">
+            <form id="send_email" class="form-stacked">
+                <label for="send_email_email">Your email address:</label>
+                <input id="send_email_email" name="email">
+                <p class="note">I won't ever spam you &mdash; I don't even store your email address.</p>
+            </form>
+            <form id="send_file" enctype="multipart/form-data" method="post" style="display: none;">
+                <input type="hidden" name="email">
+                <input type="file" name="file">
+                <div id="file_uploader"></div>
+                <input type="submit" value="Send">
+            </form>
+        </div>
+        <div id="receive_container" class="ui-tabs-panel ui-widget-content ui-corner-bottom ui-tabs-hide">
+            <form id="receive">
+                <label for="receive_email">Sender's email address:</label>
+                <input id="receive_email" name="email">
+                <input type="submit" value="Receive">
+            </form>
         </div>
     </div>
 

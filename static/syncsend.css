@@ -1,3 +1,24 @@
+#msg {
+    display: none; /* wait for Javascript to show this */
+    text-align: center;
+    background-color: #00cd64;
+    margin-bottom: 5px;
+}
+
+#tabs {
+    margin-top: 5px;
+}
+
+#tabs .ui-tabs-nav {
+    height: 2.35em;
+    text-align: center;
+}
+#tabs .ui-tabs-nav li {
+    display: inline-block;
+    float: none;
+    margin: 0em;
+}
+
 .form-stacked {
     padding-left: 0;
 }
