@@ -5,6 +5,7 @@
 
 # system imports
 import cgi
+import logging
 import urllib
 
 # twisted imports
@@ -138,10 +139,10 @@ class FileUploadChannel(HTTPChannel):
             )
 
         self.count_line_data = True # TODO: HACK!!
-        print '%s %s' % (self.command, self.path)
+        logging.info('%s %s' % (self.command, self.path))
         self.request.parseCookies() # TODO: test if we're actually handling cookies well
         if command == 'POST':
-            print command, 'gotLength()', self.length
+            logging.debug(command, 'gotLength()', self.length)
         self.request.gotLength(self.length)
         if command == 'GET':
             self.request.requestReceived(self.command, self.path, self.version)
@@ -236,13 +237,13 @@ class FileUploadChannel(HTTPChannel):
                             # TODO: multi-line values??
                             form_data_value = (yield)
                             self.request.args[form_data_name] = form_data_value
-                            print form_data_name, '=', form_data_value
+                            logging.debug(form_data_name, '=', form_data_value)
 
                             # Continue
                             line = (yield)
                     else:
                         # Line isn't start boundary
-                        print 'weird line:', line
+                        logging.warning('weird line:', line)
                         line = (yield)
             else:
                 # We're processing an XMLHTTPRequest file upload -- the body is the file itself

@@ -10,6 +10,7 @@
 import argparse
 
 import json
+import logging
 import urllib
 import urlparse
 
@@ -84,7 +85,7 @@ class SyncSendUploadRequest(FileUploadRequest):
             self.redirect('#?msg=%s' % urllib.quote_plus(
                 "Your upload is complete"
             ))
-        print self.method, 'finish()'
+        logging.debug(self.method, 'finish()')
         self.finish()
 
         get_requests[self.file_upload_path].finish()
@@ -95,6 +96,7 @@ class SyncSendDownloadRequest(http.Request):
         """
         Receiver has started downloading file
         """
+        logging.info('%s %s' % (command, path))
         http.Request.requestReceived(self, command, path, version)
         get_requests[self.path] = self
         if self.path in post_requests:
@@ -123,4 +125,7 @@ def main(args):
     reactor.run()
 
 if __name__ == "__main__":
-    main(parse_args())
+    args = parse_args()
+    logging.basicConfig(filename='log/syncsend-%s.log' % args.port, level=logging.DEBUG)
+    logging.info('Logger up')
+    main(args)
