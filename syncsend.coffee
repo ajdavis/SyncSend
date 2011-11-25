@@ -5,8 +5,28 @@
 #
 
 $ ->
-    # Do some jQuery UI stuff
+    ######## CONFIGURATION ########
+    config =
+        use_ajax_upload: true
+
+    # Set up the tab interface
     $('#tabs').tabs()
+
+    # Cache some jQuery objects
+    $sender_email_form = $('#sender_email_form')
+    $sender_file_form = $('#sender_file_form')
+    $receive_form = $('#receive_form')
+    $receive_button = $('#receive_form').find('input[type="submit"]')
+    $sender_email_form_submit = $sender_email_form.find('input[type="submit"]')
+
+    ######## CONFIGURATION ########
+    if config.use_ajax_upload
+        $sender_file_form.find('input[type="file"]').remove()
+        $sender_file_form.find('input[type="submit"]').remove()
+
+    $sender_email_form.find('input').prop 'disabled', false
+
+    ######## FUNCTIONS ########
 
     # From http://stackoverflow.com/questions/901115/get-query-string-values-in-javascript
     getParameterByName = (name) ->
@@ -31,6 +51,9 @@ $ ->
         ), 4000)
 
     # Detect change in a field by any means necessary
+    # $input: a jQuerified input elem
+    # callback: called on change. return true to clear handler
+    # TODO: way to stop the timer
     seriouslyOnChange = ($input, callback) ->
         val = $input.val()
         do ->
@@ -41,13 +64,6 @@ $ ->
                     if callback val
                         clearInterval timer
             ), 100)
-
-    msg = getParameterByName 'msg'
-    showMsg(msg) if msg
-    window.location.hash = ''
-
-    config =
-        use_ajax_upload: true
 
     upload_action = (email) -> "/api/#{ encodeURIComponent(email) }"
 
@@ -71,67 +87,55 @@ $ ->
             onComplete: options.complete or ->
             onCancel: options.cancel or ->
 
-    class SyncSend
-        constructor: ->
-            # Cache some jQuery objects
-            @$send_file_form = $('#send_file')
-            @$file_input = @$send_file_form.find('input[type="file"]')
-            @$submit_button = @$send_file_form.find('input[type="submit"]')
-            @$send_email_email = $('#send_email_email')
-            @$receive = $('#receive')
-            @$receive_button = @$receive.find('input[type="submit"]').hide()
+    ######## SHOW USER MESSAGE ########
+    msg = getParameterByName 'msg'
+    showMsg(msg) if msg
+    window.location.hash = ''
 
-            $('#send_email').submit -> false
+    ######## SENDER EVENT HANDLERS ########
 
-            if config.use_ajax_upload
-                # Won't be needing the regular upload field any more
-                @$file_input.hide()
-                @$submit_button.hide()
+    # Enable file upload when user has entered email address
+    $sender_email = $('#sender_email')
+    seriouslyOnChange $sender_email, ->
+        email = $sender_email.val()
+        email_valid = is_email email
+        $sender_email_form_submit.prop 'disabled', not email_valid
+        false # don't clear callback
 
-            # Enable file upload when user has entered email address
-            show_upload = no
+    $sender_email_form.submit ->
+        $sender_email_form.find('input').prop 'disabled', true
+        $sender_file_form.fadeIn()
 
-            $receive_email = $('#receive_email')
-            seriouslyOnChange $receive_email, =>
-                email = $receive_email.val()
-                email_valid = is_email email
-                @$receive_button[if email_valid then 'fadeIn' else 'fadeOut']()
-                return email_valid
+        if config.use_ajax_upload
+            uploader = make_uploader
+                email: $sender_email.val()
+                complete: (id, fileName, responseJSON) ->
+                    showMsg "Your upload is complete"
+                    $send_file_form.fadeOut()
+        else
+            $sender_file_form.find('input[type="file,submit"]').hide()
+            $send_file_form.attr 'action', upload_action email
+            uploader = null
+        return false
 
-            seriouslyOnChange @$send_email_email, =>
-                email = @$send_email_email.val()
-                email_valid = is_email email
-                if email_valid and not show_upload
-                    show_upload = yes
-                    $('#send_file').fadeIn()
-                    if config.use_ajax_upload
-                        @uploader = make_uploader
-                            email: email
-                            complete: (id, fileName, responseJSON) ->
-                                showMsg "Your upload is complete"
-                                @$send_file_form.fadeOut()
-                    else
-                        @$send_file_form.attr 'action', upload_action email
-                        @$file_input.show()
-                    return true # clear change handler
-                else if not email_valid and show_upload
-                    show_upload = no
-                    $('#send_file').fadeOut ->
-                        $('#file_uploader').html('')
-                    @uploader = null
-                return false # don't clear change handler
+    $sender_file_form.find('input[name="cancel"]').click ->
+        $sender_email_form.find('input').prop 'disabled', false
+        $sender_file_form.fadeOut()
 
-            $('#receive').submit @submit_receive_form
+    $receive_email = $receive_form.find('input[name="email"]')
+    seriouslyOnChange $receive_email, ->
+        email = $receive_email.val()
+        email_valid = is_email email
+        $receive_button[if email_valid then 'fadeIn' else 'fadeOut']()
+        return email_valid
 
-            # Don't let the browser pre-enter form fields
-            $receive_email.val('')
-            @$send_email_email.val('')
-            @$file_input.val('')
-        submit_receive_form: (e) =>
-            $form = $ '#receive'
-            email = $form.find('input[name="email"]').val()
-            if email
-                window.open "/api/#{ encodeURIComponent(email) }",'Download'
-            return false
+    $receive_form.submit ->
+        email = $receive_form.find('input[name="email"]').val()
+        if email
+            window.open "/api/#{ encodeURIComponent(email) }",'Download'
+        return false
 
-    new SyncSend()
+    # Don't let the browser pre-enter form fields
+    $receive_email.val('')
+    $sender_email.val('')
+    $sender_file_form.find('input[type="file"]').val('')
