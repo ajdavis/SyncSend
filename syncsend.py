@@ -85,7 +85,7 @@ class SyncSendUploadRequest(FileUploadRequest):
             self.redirect('#?msg=%s' % urllib.quote_plus(
                 "Your upload is complete"
             ))
-        logging.debug(self.method, 'finish()')
+        logging.debug('%s finish()' % self.method)
         self.finish()
 
         get_requests[self.file_upload_path].finish()
