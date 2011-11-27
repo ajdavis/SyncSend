@@ -1,0 +1,51 @@
+#! /bin/sh
+
+### BEGIN INIT INFO
+# Provides:          syncsend
+# Required-Start:    $local_fs $remote_fs $network $syslog
+# Required-Stop:     $local_fs $remote_fs $network $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: starts the syncsend web server
+# Description:       starts syncsend using start-stop-daemon
+### END INIT INFO
+
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+DAEMON=/root/.virtualenvs/thetubes/SyncSend/syncsend.sh
+NAME=syncsend
+DESC=syncsend
+
+test -x $DAEMON || exit 0
+
+. /lib/lsb/init-functions
+
+case "$1" in
+  start)
+	echo -n "Starting $DESC: "
+	start-stop-daemon --start --quiet --pidfile /var/run/$NAME.pid \
+		--exec $DAEMON --background || true
+	echo "$NAME."
+	;;
+  stop)
+	echo -n "Stopping $DESC: "
+	start-stop-daemon --stop --quiet --pidfile /var/run/$NAME.pid || true
+	echo "$NAME."
+	;;
+  restart)
+	echo -n "Restarting $DESC: "
+	start-stop-daemon --stop --quiet --pidfile /var/run/$NAME.pid || true
+	sleep 1
+	start-stop-daemon --start --quiet --pidfile \
+		/var/run/$NAME.pid --exec $DAEMON --background || true
+	echo "$NAME."
+	;;
+  status)
+	status_of_proc -p /var/run/$NAME.pid "$DAEMON" syncsend && exit 0 || exit $?
+	;;
+  *)
+	echo "Usage: $NAME {start|stop|restart|status}" >&2
+	exit 1
+	;;
+esac
+
+exit 0

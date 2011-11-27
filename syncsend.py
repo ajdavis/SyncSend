@@ -8,9 +8,9 @@
 # code should be here, rather than in upload.py
 #
 import argparse
-
 import json
 import logging
+import os
 import urllib
 import urlparse
 
@@ -116,13 +116,20 @@ class SyncSendHttpFactory(http.HTTPFactory):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='SyncSend server')
+    parser.add_argument('--pidfile', type=str, help='Where to write the process id')
     parser.add_argument('port', type=int, help='TCP port on which to listen')
     return parser.parse_args()
 
 def main(args):
-    reactor.listenTCP(args.port, SyncSendHttpFactory())
-    print 'Listening on port', args.port
-    reactor.run()
+    if args.pidfile:
+        with file(args.pidfile, 'w') as pidfile:
+            pidfile.write(str(os.getpid()))
+    try:
+        reactor.listenTCP(args.port, SyncSendHttpFactory())
+        print 'Listening on port', args.port
+        reactor.run()
+    finally:
+        os.unlink(args.pidfile)
 
 if __name__ == "__main__":
     args = parse_args()
